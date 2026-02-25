@@ -2,7 +2,6 @@ package log
 
 import (
 	"context"
-	"os"
 	"time"
 )
 
@@ -12,8 +11,6 @@ func init() {
 	std = NewDefaultFactory(
 		context.Background(),
 		Formatter{BaseTime: time.Now()},
-		os.Stderr,
-		"",
 		nil,
 		false,
 	).Logger()

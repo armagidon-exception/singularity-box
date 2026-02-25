@@ -3,7 +3,6 @@ package box
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"runtime/debug"
 	"time"
@@ -132,7 +131,8 @@ func New(options Options) (*Box, error) {
 	var needCacheFile bool
 	var needClashAPI bool
 	var needV2RayAPI bool
-	if experimentalOptions.CacheFile != nil && experimentalOptions.CacheFile.Enabled || options.PlatformLogWriter != nil {
+	if experimentalOptions.CacheFile != nil && experimentalOptions.CacheFile.Enabled ||
+		options.PlatformLogWriter != nil {
 		needCacheFile = true
 	}
 	if experimentalOptions.ClashAPI != nil || options.PlatformLogWriter != nil {
@@ -142,15 +142,10 @@ func New(options Options) (*Box, error) {
 		needV2RayAPI = true
 	}
 	platformInterface := service.FromContext[adapter.PlatformInterface](ctx)
-	var defaultLogWriter io.Writer
-	if platformInterface != nil {
-		defaultLogWriter = io.Discard
-	}
 	logFactory, err := log.New(log.Options{
 		Context:        ctx,
 		Options:        common.PtrValueOrDefault(options.Log),
 		Observable:     needClashAPI,
-		DefaultWriter:  defaultLogWriter,
 		BaseTime:       createdAt,
 		PlatformWriter: options.PlatformLogWriter,
 	})
@@ -160,11 +155,16 @@ func New(options Options) (*Box, error) {
 
 	var internalServices []adapter.LifecycleService
 	certificateOptions := common.PtrValueOrDefault(options.Certificate)
-	if C.IsAndroid || certificateOptions.Store != "" && certificateOptions.Store != C.CertificateStoreSystem ||
+	if C.IsAndroid ||
+		certificateOptions.Store != "" && certificateOptions.Store != C.CertificateStoreSystem ||
 		len(certificateOptions.Certificate) > 0 ||
 		len(certificateOptions.CertificatePath) > 0 ||
 		len(certificateOptions.CertificateDirectoryPath) > 0 {
-		certificateStore, err := certificate.NewStore(ctx, logFactory.NewLogger("certificate"), certificateOptions)
+		certificateStore, err := certificate.NewStore(
+			ctx,
+			logFactory.NewLogger("certificate"),
+			certificateOptions,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -175,9 +175,23 @@ func New(options Options) (*Box, error) {
 	routeOptions := common.PtrValueOrDefault(options.Route)
 	dnsOptions := common.PtrValueOrDefault(options.DNS)
 	endpointManager := endpoint.NewManager(logFactory.NewLogger("endpoint"), endpointRegistry)
-	inboundManager := inbound.NewManager(logFactory.NewLogger("inbound"), inboundRegistry, endpointManager)
-	outboundManager := outbound.NewManager(logFactory.NewLogger("outbound"), outboundRegistry, endpointManager, routeOptions.Final)
-	dnsTransportManager := dns.NewTransportManager(logFactory.NewLogger("dns/transport"), dnsTransportRegistry, outboundManager, dnsOptions.Final)
+	inboundManager := inbound.NewManager(
+		logFactory.NewLogger("inbound"),
+		inboundRegistry,
+		endpointManager,
+	)
+	outboundManager := outbound.NewManager(
+		logFactory.NewLogger("outbound"),
+		outboundRegistry,
+		endpointManager,
+		routeOptions.Final,
+	)
+	dnsTransportManager := dns.NewTransportManager(
+		logFactory.NewLogger("dns/transport"),
+		dnsTransportRegistry,
+		outboundManager,
+		dnsOptions.Final,
+	)
 	serviceManager := boxService.NewManager(logFactory.NewLogger("service"), serviceRegistry)
 	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
 	service.MustRegister[adapter.InboundManager](ctx, inboundManager)
@@ -186,7 +200,12 @@ func New(options Options) (*Box, error) {
 	service.MustRegister[adapter.ServiceManager](ctx, serviceManager)
 	dnsRouter := dns.NewRouter(ctx, logFactory, dnsOptions)
 	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
-	networkManager, err := route.NewNetworkManager(ctx, logFactory.NewLogger("network"), routeOptions, dnsOptions)
+	networkManager, err := route.NewNetworkManager(
+		ctx,
+		logFactory.NewLogger("network"),
+		routeOptions,
+		dnsOptions,
+	)
 	if err != nil {
 		return nil, E.Cause(err, "initialize network manager")
 	}
@@ -347,7 +366,11 @@ func New(options Options) (*Box, error) {
 	if needClashAPI {
 		clashAPIOptions := common.PtrValueOrDefault(experimentalOptions.ClashAPI)
 		clashAPIOptions.ModeList = experimental.CalculateClashModeList(options.Options)
-		clashServer, err := experimental.NewClashServer(ctx, logFactory.(log.ObservableFactory), clashAPIOptions)
+		clashServer, err := experimental.NewClashServer(
+			ctx,
+			logFactory.(log.ObservableFactory),
+			clashAPIOptions,
+		)
 		if err != nil {
 			return nil, E.Cause(err, "create clash-server")
 		}
@@ -356,7 +379,10 @@ func New(options Options) (*Box, error) {
 		internalServices = append(internalServices, clashServer)
 	}
 	if needV2RayAPI {
-		v2rayServer, err := experimental.NewV2RayServer(logFactory.NewLogger("v2ray-api"), common.PtrValueOrDefault(experimentalOptions.V2RayAPI))
+		v2rayServer, err := experimental.NewV2RayServer(
+			logFactory.NewLogger("v2ray-api"),
+			common.PtrValueOrDefault(experimentalOptions.V2RayAPI),
+		)
 		if err != nil {
 			return nil, E.Cause(err, "create v2ray-server")
 		}
@@ -380,7 +406,10 @@ func New(options Options) (*Box, error) {
 			WriteToSystem: ntpOptions.WriteToSystem,
 		})
 		timeService.TimeService = ntpService
-		internalServices = append(internalServices, adapter.NewLifecycleService(ntpService, "ntp service"))
+		internalServices = append(
+			internalServices,
+			adapter.NewLifecycleService(ntpService, "ntp service"),
+		)
 	}
 	return &Box{
 		network:         networkManager,
@@ -446,15 +475,40 @@ func (s *Box) preStart() error {
 	if err != nil {
 		return E.Cause(err, "start logger")
 	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateInitialize, s.internalService) // cache-file clash-api v2ray-api
+	err = adapter.StartNamed(
+		s.logger,
+		adapter.StartStateInitialize,
+		s.internalService,
+	) // cache-file clash-api v2ray-api
 	if err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateInitialize, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.outbound, s.inbound, s.endpoint, s.service)
+	err = adapter.Start(
+		s.logger,
+		adapter.StartStateInitialize,
+		s.network,
+		s.dnsTransport,
+		s.dnsRouter,
+		s.connection,
+		s.router,
+		s.outbound,
+		s.inbound,
+		s.endpoint,
+		s.service,
+	)
 	if err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.outbound, s.dnsTransport, s.dnsRouter, s.network, s.connection, s.router)
+	err = adapter.Start(
+		s.logger,
+		adapter.StartStateStart,
+		s.outbound,
+		s.dnsTransport,
+		s.dnsRouter,
+		s.network,
+		s.connection,
+		s.router,
+	)
 	if err != nil {
 		return err
 	}
@@ -474,7 +528,19 @@ func (s *Box) start() error {
 	if err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStatePostStart, s.outbound, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.inbound, s.endpoint, s.service)
+	err = adapter.Start(
+		s.logger,
+		adapter.StartStatePostStart,
+		s.outbound,
+		s.network,
+		s.dnsTransport,
+		s.dnsRouter,
+		s.connection,
+		s.router,
+		s.inbound,
+		s.endpoint,
+		s.service,
+	)
 	if err != nil {
 		return err
 	}
@@ -482,7 +548,19 @@ func (s *Box) start() error {
 	if err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStarted, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.outbound, s.inbound, s.endpoint, s.service)
+	err = adapter.Start(
+		s.logger,
+		adapter.StartStateStarted,
+		s.network,
+		s.dnsTransport,
+		s.dnsRouter,
+		s.connection,
+		s.router,
+		s.outbound,
+		s.inbound,
+		s.endpoint,
+		s.service,
+	)
 	if err != nil {
 		return err
 	}
@@ -520,7 +598,13 @@ func (s *Box) Close() error {
 		err = E.Append(err, closeItem.service.Close(), func(err error) error {
 			return E.Cause(err, "close ", closeItem.name)
 		})
-		s.logger.Trace("close ", closeItem.name, " completed (", F.Seconds(time.Since(startTime).Seconds()), "s)")
+		s.logger.Trace(
+			"close ",
+			closeItem.name,
+			" completed (",
+			F.Seconds(time.Since(startTime).Seconds()),
+			"s)",
+		)
 	}
 	for _, lifecycleService := range s.internalService {
 		s.logger.Trace("close ", lifecycleService.Name())
@@ -528,7 +612,13 @@ func (s *Box) Close() error {
 		err = E.Append(err, lifecycleService.Close(), func(err error) error {
 			return E.Cause(err, "close ", lifecycleService.Name())
 		})
-		s.logger.Trace("close ", lifecycleService.Name(), " completed (", F.Seconds(time.Since(startTime).Seconds()), "s)")
+		s.logger.Trace(
+			"close ",
+			lifecycleService.Name(),
+			" completed (",
+			F.Seconds(time.Since(startTime).Seconds()),
+			"s)",
+		)
 	}
 	s.logger.Trace("close logger")
 	startTime := time.Now()

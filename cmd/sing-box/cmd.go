@@ -12,7 +12,6 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
-
 	"github.com/spf13/cobra"
 )
 
@@ -30,10 +29,14 @@ var mainCommand = &cobra.Command{
 }
 
 func init() {
-	mainCommand.PersistentFlags().StringArrayVarP(&configPaths, "config", "c", nil, "set configuration file path")
-	mainCommand.PersistentFlags().StringArrayVarP(&configDirectories, "config-directory", "C", nil, "set configuration directory path")
-	mainCommand.PersistentFlags().StringVarP(&workingDir, "directory", "D", "", "set working directory")
-	mainCommand.PersistentFlags().BoolVarP(&disableColor, "disable-color", "", false, "disable color output")
+	mainCommand.PersistentFlags().
+		StringArrayVarP(&configPaths, "config", "c", nil, "set configuration file path")
+	mainCommand.PersistentFlags().
+		StringArrayVarP(&configDirectories, "config-directory", "C", nil, "set configuration directory path")
+	mainCommand.PersistentFlags().
+		StringVarP(&workingDir, "directory", "D", "", "set working directory")
+	mainCommand.PersistentFlags().
+		BoolVarP(&disableColor, "disable-color", "", false, "disable color output")
 }
 
 func preRun(cmd *cobra.Command, args []string) {
@@ -52,7 +55,10 @@ func preRun(cmd *cobra.Command, args []string) {
 		globalCtx = filemanager.WithDefault(globalCtx, "", "", sudoUID, sudoGID)
 	}
 	if disableColor {
-		log.SetStdLogger(log.NewDefaultFactory(context.Background(), log.Formatter{BaseTime: time.Now(), DisableColors: true}, os.Stderr, "", nil, false).Logger())
+		log.SetStdLogger(
+			log.NewDefaultFactory(context.Background(), log.Formatter{BaseTime: time.Now(), DisableColors: true}, nil, false).
+				Logger(),
+		)
 	}
 	if workingDir != "" {
 		_, err := os.Stat(workingDir)
@@ -67,5 +73,7 @@ func preRun(cmd *cobra.Command, args []string) {
 	if len(configPaths) == 0 && len(configDirectories) == 0 {
 		configPaths = append(configPaths, "config.json")
 	}
-	globalCtx = include.Context(service.ContextWith(globalCtx, deprecated.NewStderrManager(log.StdLogger())))
+	globalCtx = include.Context(
+		service.ContextWith(globalCtx, deprecated.NewStderrManager(log.StdLogger())),
+	)
 }
